@@ -1,0 +1,374 @@
+<html>
+<head>
+  <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+  <meta content="utf-8" http-equiv="encoding">
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+    
+
+
+    <script>
+      //The piece the player uses. Represents either 'x' or 'o' 
+      var playerPiece = ''; 
+      //Bool representing if the player can perform a move
+      var isPlayerTurn = false; 
+
+
+      //Checks if the current player (that just made a move) has just won the game
+      function checkWin() {
+        if (playerPiece !== '') {
+
+          var cellPrefix = "#";
+          var count = 0;
+
+          //Check horizontal win
+          var index = 1;
+          while (index < 10) {
+            //If a value has been placed
+            if ($(cellPrefix + index).html() === playerPiece)
+              count++;
+
+            //the player has won
+            if (count === 3)
+              return true;
+
+            //Reset count at new row
+            if (index % 3 === 0)
+              count = 0;
+
+            index++;
+          }
+
+          //Vertical check
+          index = 1;
+          while (index < 4) {
+
+            //If a value has been placed and it is the same value in all columns of the current row
+            if ($(cellPrefix + index).html() === playerPiece)
+              if ($(cellPrefix + (index + 3)).html() === playerPiece)
+                if ($(cellPrefix + (index + 6)).html() === playerPiece)
+                  return true;
+
+            index++;
+          }
+
+          //Diagonal check
+          //top left -> bottom right
+          if ($(cellPrefix + 1).html() === playerPiece && $(cellPrefix + 5).html() === playerPiece 
+            && $(cellPrefix + 9).html() === playerPiece)
+            return true;
+          //top right -> bottom left
+          if ($(cellPrefix + 3).html() === playerPiece && $(cellPrefix + 5).html() === playerPiece 
+            && $(cellPrefix + 7).html() === playerPiece)
+            return true;
+
+          return false;
+        }
+        return false;
+
+      }
+
+
+      //Checks if the board is filled, and it is a draw
+      function checkDraw() {
+        var cellPrefix = "#";
+
+        //For each cell on the board
+        for (var i = 1; i < 10; i++) {
+          //if the cell is empty, there hasn't been a draw
+          if ($(cellPrefix + i).html() === '')
+            return false;
+        }
+        //All cells are filled, there is a draw
+        return true;
+      }
+
+
+      $(function(){
+        var iosocket = io.connect();
+
+        //Once we have first connected to the server
+        iosocket.on('connect', function () {
+          
+          //Set the player to be either 'X' or 'O'
+          iosocket.on('pieceRegistration', function(piece, pieceMsg) {
+            playerPiece = piece;
+            $('#player-message').html(pieceMsg);
+          });
+
+          //Sets the current player's turn bool. Also displays text indicator whether it is the player's turn
+          iosocket.on('notifyTurn', function(turn, waitMsg = false) {
+            isPlayerTurn = turn;
+            if (waitMsg) {
+              $("#turnMsg").html("Please wait for your opponent to connect");
+            }
+            else {
+              if (isPlayerTurn)
+                $("#turnMsg").html("It is your turn");
+              else $("#turnMsg").html("Please wait for your opponent to complete their turn");
+            }
+          });
+
+          //The opponent has just completed their turn, update the current player's board with their last move
+          iosocket.on('updateBoard', function(cellIndex) {
+            var jQueryID = "#" + cellIndex;
+            //Update the cell the opponent just chose with their piece
+            if (playerPiece === 'X')
+              $(jQueryID).html('O');
+            else $(jQueryID).html('X');
+
+          });
+
+          //Update the screen with the end game message, and either victory/loss
+          iosocket.on('endGame', function(winner, cell) {
+            console.log("endgame received: " + playerPiece);
+            //victory
+            if (winner === playerPiece) {
+              $("#player-message").html("You win! Would you like to play another game?");
+            }
+            else if (winner.length === 1) {
+              //Update the board with the winner's last piece
+              $("#" + cell).html(winner);
+              //Update top text with the end game message
+              $("#player-message").html("You lose! Would you like to play another game?");
+            }
+            //It's a draw
+            else {
+              $("#player-message").html("It's a draw! Would you like to play another game?");
+              $("#" + cell).html(winner);
+            }
+          });
+
+        });
+
+        //Handles each of the cells being clicked/selected; For making a turn
+        $('#1,#2,#3,#4,#5,#6,#7,#8,#9').on('click', function() {
+          //Can only make a turn when it is ours
+          if (isPlayerTurn) {
+            var btnID = this.id;
+            var jQueryID = "#" + btnID;
+
+            //Determine if the cell is empty
+            if ($(jQueryID).html() === "") {
+              //Update the cell
+              $(jQueryID).html(playerPiece);
+
+              //Check if this player has won
+              if (checkWin()) {
+                isPlayerTurn = false; //Can't perform any moves after turn finished
+                iosocket.send("victory" + playerPiece + btnID);
+              }
+              //Check if the board is now full
+              else if (checkDraw()) {
+                isPlayerTurn = false;
+                iosocket.send("draw" + btnID);
+              }
+              //Notify the server that the player's turn has ended
+              else {
+                //End turn
+                isPlayerTurn = false;
+                //Let the server know that the game is still going, and send the cell we just chose
+                iosocket.send("continue" + btnID);
+
+                $("#turnMsg").html("Please wait for your opponent to complete their turn");
+
+                /*$("#player-message").html("You win! Would you like to play another game?");*/
+              }
+
+            }
+            //Notify the player that they have selected an invalid cell
+            else {
+              $("#msgBoxText").html("Please select a cell which hasn't already been filled");
+            }
+          }
+          //The player just selected a cell when it isn't their turn. Notify them
+          else $("#msgBoxText").html("You can only place an " + playerPiece + 
+            " in a square when it is your turn.")
+        });
+
+
+        /////// All functionality relating to game resetting is below ///////
+
+        //Clears each of the squares, and sets player 1 to be able to perform their turn
+        function resetGame() {
+          //Resetting this user's board
+          for (var i = 1; i < 10; i++) {
+            //Clear each of the cells
+            $("#" + i).html("");
+          }
+          if (playerPiece === 'X') {
+            $("#turnMsg").html("It is your turn");
+            isPlayerTurn = true;
+          }
+          else {
+            $("#turnMsg").html("Please wait for your opponent to complete their turn");
+            isPlayerTurn = false;
+          }
+        }
+
+        //Reset the board and let the server know a reset has been called
+        $("#resetBtn").on('click', function() {
+          iosocket.send("reset");
+
+          resetGame();
+        });
+
+        //Server just called an opponent reset
+        iosocket.on('reset', function(msg) {
+          $("#msgBoxText").html("The game has been reset. You can now play another game.")
+          resetGame();
+        });
+
+
+   });
+  </script>
+</head>
+<body>
+
+  <div class="main">
+    <h1 class="text-center title-font">Tic Tac Toe</h1>
+    
+    <!-- Displays the player indicator (to show which piece the user will play as) -->
+    <div class="player-indicator ">
+      <h2 id="player-message" class="text-center"></h2>
+      <div id="resetParent">
+        <button id="resetBtn" type="button">Reset</button>
+      </div>
+    </div>
+
+    <!-- To display messages pertaining to whos turn it is -->
+    <div>
+      <h4 id="turnMsg" class=text-center></h4>
+    </div>
+    
+    <!-- The grid containing the game board -->
+    <div class="container game-board text-center">
+      
+      <div class="row body-font">
+        <div class="col cell">
+          <button id="1" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="2" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="3" class="cell" type="button"></button>
+        </div>
+      </div>
+      
+      <div class="row body-font">
+        <div class="col cell">
+          <button id="4" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="5" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="6" class="cell" type="button"></button>
+        </div>
+      </div>
+      
+      <div class="row body-font">
+        <div class="col cell">
+          <button id="7" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="8" class="cell" type="button"></button>
+        </div>
+        <div class="col cell">
+          <button id="9" class="cell" type="button"></button>
+        </div>
+      </div>
+
+    </div>
+
+
+    <!-- Message box to display error messages/warnings/reset info -->
+    <div id="message-box">
+      <p id="msgBoxText" class="text-center"></p>
+    </div>
+    
+  </div>
+</body>
+
+<style >
+
+
+  body {
+    background-color: #BBDEFB;
+  }
+
+  .body-font {
+    font-size: 5em;
+  }
+
+
+  .main {
+    width: 60%;
+    margin: 30px auto;
+  }
+
+  .player-indicator {
+    width: 40%;
+    min-width: 400px;
+    margin: 0 auto;
+  }
+
+
+  /*The background image, shadow and size of the game board */
+  .game-board {
+    background-image: url('http://i63.tinypic.com/vwr78i.png');
+    border-radius: 5px;
+    box-shadow: 8px 8px 7px #78909C;
+    width: 600px;
+    height: 450px;
+  }
+  .cell {
+    width: 120px;
+    height: 150px;
+    
+  }
+
+  /* This is for the default buttons which make up each cell of the game board */
+  button {
+    background-color: rgba(0,0,0,0);
+    border: none;
+    color: white;
+  }
+
+
+  /* Creates an adequately sized container for the reset button, and below the style of the button */ 
+  #resetParent {
+    margin: 0 auto;
+    width: 50px;
+
+  }
+  #resetBtn {
+    
+    border: 2px groove grey;
+    color: black;
+    background-color: rgb(180,180,180);
+  }
+
+
+  /* Sizing and style of the message box located under the game board. makes it look more like a command line window */
+  #message-box {
+    width: 40%;
+    min-width: 500px;
+    height: 40px;
+    margin: 0 auto;
+    margin-top: 30px;
+    padding-top: 5px;
+    background-color: black;
+    border: 3px inset white;
+  }
+
+  #msgBoxText {
+    color: red;
+  }
+
+
+</style>
+
+</html>
